@@ -278,6 +278,9 @@ def render_column_matching_ui(
         h1.caption("**Столбец из файла**")
         h2.caption("**Столбец реестра (выберите соответствие)**")
 
+        taken_registry_cols = {v for v in approved.values() if v is not None}
+        available_registry_cols = [c for c in registry_cols if c not in taken_registry_cols]
+
         items_to_approve = {}
 
         for i, (col, info) in enumerate(pending.items()):
@@ -285,7 +288,8 @@ def render_column_matching_ui(
             with c1:
                 st.text(col)
             with c2:
-                options = ["— Пропустить —"] + info["candidates"] + registry_cols
+                valid_candidates = [c for c in info["candidates"] if c not in taken_registry_cols]
+                options = ["— Пропустить —"] + valid_candidates + available_registry_cols
                 # Убираем дубликаты, сохраняя порядок
                 seen = set()
                 unique_options = []

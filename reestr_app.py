@@ -21,6 +21,7 @@ from modules.auth import show_login_page
 from modules.visuals import style_css
 from layouts.reestr_automation import render_reestr_automation
 from layouts.reestr_visualisation import render_reestr_visualisation
+from layouts.settings.render import render_settings
 
 # ─── Настройка логирования ────────────────────────────────────────────────────
 LOG_FORMAT = '%(asctime)s | %(levelname)s | %(session_id)s | %(user)s | %(action)s | %(details)s'
@@ -103,6 +104,14 @@ def main_app():
         st.markdown(f"Пользователь: **{st.session_state.get('fio', 'N/A')}**")
         st.markdown(f"Подразделение: **{st.session_state.get('department', 'N/A')}**")
         st.markdown("---")
+
+        @st.dialog("Настройки")
+        def show_settings_dialog():
+            render_settings()
+
+        if st.button("Настройки", width='stretch'):
+            show_settings_dialog()
+
         if st.button("Выход", width='stretch'):
             log_action("LOGOUT", "User logged out from EN_FRE")
             st.session_state.authenticated = False

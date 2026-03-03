@@ -49,6 +49,20 @@ def get_user_settings(username: str) -> dict:
         "column_mappings": {},
         "sheet_mapping": None,
     }
+    if username == "Guest":
+        guest_file = os.path.join("data", "guest_settings.json")
+        if os.path.exists(guest_file):
+            try:
+                with open(guest_file, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+                for key in default_settings:
+                    if key not in saved:
+                        saved[key] = default_settings[key]
+                return saved
+            except Exception:
+                pass
+        return default_settings
+
     if not os.path.exists(DB_PATH):
         return default_settings
         
@@ -69,6 +83,16 @@ def get_user_settings(username: str) -> dict:
 
 def update_user_settings(username: str, settings: dict) -> bool:
     """Обновить настройки пользователя."""
+    if username == "Guest":
+        guest_file = os.path.join("data", "guest_settings.json")
+        os.makedirs("data", exist_ok=True)
+        try:
+            with open(guest_file, "w", encoding="utf-8") as f:
+                json.dump(settings, f, ensure_ascii=False, indent=4)
+            return True
+        except Exception:
+            return False
+
     if not os.path.exists(DB_PATH):
         return True
 
