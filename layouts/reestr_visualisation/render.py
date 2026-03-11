@@ -2,29 +2,68 @@
 Вкладка «Визуализация реестра кормов».
 
 Загружает Excel-файл реестра из стандартного пути (настройки пользователя),
-отображает каскадные фильтры, графики, таблицу и статистику.
+отображает каскадные фильтры (на основе справочника кодировки),
+таблицу данных, графики и статистику.
 """
 
 import streamlit as st
 import pandas as pd
+import plotly.express as _px
 
 from modules.cascade_discovery import CascadeDiscovery
+from modules.codebook import load_codebook
 from .data_loading import load_and_clean_sheet, classify_columns
 from .filters import (
-    MAIN_FILTERS, FILTER_GROUPS,
-    create_text_filter, create_int_filter, create_float_filter,
+    FILTER_GROUPS,
+    create_year_filter, create_text_filter, create_int_filter, create_float_filter,
     reset_all_filters, fix_filters_automatically,
 )
-from .charts import build_chart
+from .charts import (
+    build_chart, build_hybrid_chart,
+    AXIS_LABELS, SUPPORTS_COLOR, SUPPORTS_TREND, SUPPORTS_AGG,
+)
+
+CHART_TYPES = [
+    "Столбчатая диаграмма",
+    "Линейный график",
+    "Точечная диаграмма",
+    "Гистограмма",
+    "Круговая диаграмма",
+    "Ящик с усами",
+]
+
+AGG_OPTIONS = ["Среднее", "Сумма", "Медиана", "Количество", "Минимум", "Максимум"]
+HYBRID_CHART_TYPES = ["Линия", "Столбцы", "Точки"]
+
+HELPS = {
+    "chart_type": "Выберите способ представления данных. Для каждого типа доступны разные параметры.",
+    "x_col":      "Столбец для горизонтальной оси / группировки категорий.",
+    "y_col":      "Числовой столбец для вертикальной оси / значений.",
+    "agg_type":   "Как свернуть несколько строк с одним X в одно значение. "
+                  "«Среднее» — среднее арифметическое, «Количество» — число записей и т.д.",
+    "color_col":  "Столбец для цветового разделения данных. "
+                  "Доступны столбцы с не более чем 50 уникальными значениями.",
+    "bar_mode":   "«Накопление» — столбцы складываются; «Без накопления» — рядом.",
+    "show_trend": "Добавляет пунктирную линию линейной регрессии (МНК) поверх графика.",
+    "hybrid":     "Добавьте несколько метрик для отображения на одном графике.",
+    "codebook":   "Фильтр по справочнику кодировки. Сужает строки реестра по смысловым атрибутам.",
+}
+
+# Год — имя столбца (может отсутствовать в данных)
+_YEAR_COLS = {'год', 'year'}
 
 
 # ─────────────────────────────────────────────────────────────────
+def _safe_str_series(series: pd.Series) -> pd.Series:
+    """Безопасное преобразование столбца в строку (убирает .0 у целых чисел)."""
+    return series.astype(str).str.replace(r'\.0$', '', regex=True)
+
 def render_reestr_visualisation():
     """Основная функция рендеринга вкладки «Визуализация реестра»."""
 
     st.subheader("Визуализация реестра кормов")
 
-    # ── Загрузка стороннего реестра (опционально) ─────────────────
+    # ── Загрузка стороннего реестра ──────────────────────────────
     with st.expander("Загрузить сторонний реестр (опционально)"):
         vis_temp_registry = st.file_uploader(
             "Загрузите Excel-файл реестра для визуализации",
@@ -32,7 +71,6 @@ def render_reestr_visualisation():
             key="vis_temp_registry_upload",
         )
 
-    # ── Путь к файлу ─────────────────────────────────────────────
     excel_path = st.session_state.get("current_excel_path")
     using_vis_temp = False
 
@@ -44,9 +82,9 @@ def render_reestr_visualisation():
                 f.write(vis_temp_registry.getvalue())
             excel_path = temp_path
             using_vis_temp = True
-            st.info(f"Используется загруженный сторонний реестр: **{vis_temp_registry.name}**")
+            st.info(f"Используется загруженный файл: **{vis_temp_registry.name}**")
         except Exception as e:
-            st.error(f"Ошибка сохранения временного реестра: {e}")
+            st.error(f"Ошибка сохранения: {e}")
 
     if not using_vis_temp:
         if not excel_path:
@@ -54,7 +92,6 @@ def render_reestr_visualisation():
             return
         st.info(f"Реестр (база): `{excel_path}`")
 
-    # Сброс кеша при смене источника данных
     prev_vis_source = st.session_state.get("rv_source_path")
     if prev_vis_source != excel_path:
         st.session_state["rv_source_path"] = excel_path
@@ -73,7 +110,6 @@ def render_reestr_visualisation():
         st.info("Файл не содержит листов.")
         return
 
-    # Инициализация состояния
     st.session_state.setdefault("rv_selected_sheet", sheet_names[0])
     st.session_state.setdefault("rv_df", None)
     st.session_state.setdefault("rv_last_sheet", None)
@@ -91,7 +127,7 @@ def render_reestr_visualisation():
         st.session_state.rv_df = None
         st.session_state.rv_last_sheet = None
 
-    # ── Загрузка данные листа ────────────────────────────────────
+    # ── Загрузка данных ──────────────────────────────────────────
     if st.session_state.rv_df is None or st.session_state.rv_last_sheet != selected_sheet:
         df, info_msg = load_and_clean_sheet(excel_path, selected_sheet)
         if df is None:
@@ -105,19 +141,13 @@ def render_reestr_visualisation():
     text_cols, integer_cols, float_cols = classify_columns(df)
     numeric_cols = integer_cols + float_cols
 
-    # ── Каскадный порядок фильтров ───────────────────────────────
-    all_available = []
-    for col in MAIN_FILTERS:
-        if col in df.columns:
-            all_available.append(col)
-    for group_cols in FILTER_GROUPS.values():
-        for col in group_cols:
-            if col in df.columns and col not in all_available:
-                all_available.append(col)
-    for col in df.columns:
-        if col not in all_available:
-            all_available.append(col)
+    color_candidates = [c for c in text_cols if df[c].nunique() <= 50]
+    for c in numeric_cols:
+        if df[c].nunique() <= 50 and c not in color_candidates:
+            color_candidates.append(c)
 
+    # ── Каскадный порядок фильтров ───────────────────────────────
+    all_available = list(df.columns)
     cache_key = f"rv_cascade_order_{selected_sheet}"
     if cache_key in st.session_state:
         cascade_order = st.session_state[cache_key]
@@ -132,53 +162,184 @@ def render_reestr_visualisation():
                 cascade_order = all_available
         st.session_state[cache_key] = cascade_order
 
-    # ── Построение фильтров ──────────────────────────────────────
+    # ── Загрузка справочника кодировки ───────────────────────────
+    try:
+        geo_map, culture_map, feed_map = load_codebook()
+        has_codebook = not geo_map.empty or not culture_map.empty or not feed_map.empty
+    except Exception:
+        geo_map = pd.DataFrame()
+        culture_map = pd.Series(dtype=object)
+        feed_map = pd.Series(dtype=object)
+        has_codebook = False
+
+    # ══════════════════════════════════════════════════════════════
+    # ── ОСНОВНЫЕ ФИЛЬТРЫ (одна строка) ───────────────────────────
+    # ══════════════════════════════════════════════════════════════
     st.markdown("---")
-    st.subheader("Фильтры данных")
 
-    selected_filters: dict[str, list] = {}
-    numeric_filters: dict[str, tuple] = {}
-    processed_cols: set[str] = set()
-
-    # Порядок основных фильтров: берем из MAIN_FILTERS, оставляя только доступные
-    ordered_main = [c for c in MAIN_FILTERS if c in df.columns]
-
-    # Заголовок + сброс
     hc1, hc2 = st.columns([4, 1])
     with hc1:
-        st.markdown("### Основные фильтры")
+        st.subheader("Фильтры данных")
     with hc2:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Сбросить все фильтры", key="rv_reset_all",
-                      help="Сбросит все фильтры", width='stretch'):
+        if st.button("Сбросить фильтры", key="rv_reset_all",
+                     help="Сбросит все фильтры", use_container_width=True):
             reset_all_filters(df)
 
-    # ── Основные фильтры ─────────────────────────────────────────
-    if ordered_main:
-        main_cols_ui = st.columns(len(ordered_main))
-        current_filtered = df.copy()
-        for idx, col_name in enumerate(ordered_main):
-            processed_cols.add(col_name)
-            if col_name in text_cols:
-                result = create_text_filter(col_name, main_cols_ui, idx, current_filtered)
+    selected_filters: dict[str, list] = {}
+    numeric_filters:  dict[str, tuple] = {}
+    processed_cols:   set[str] = set()
+
+    # Найдём столбец «Год» в данных
+    year_col = next(
+        (c for c in df.columns if c.lower() in _YEAR_COLS and c in integer_cols), None
+    )
+    # Найдём столбец «Кодировка»
+    kod_col = next(
+        (c for c in df.columns if c.lower().replace(" ", "") in ("кодировка", "kod")), None
+    )
+
+    # Строим список основных фильтров — ВСЕГДА одна строка
+    # Порядок: Год | Регион | Хозяйство | Подразделение | Культура | Тип корма | Кодировка
+    MAIN_SLOTS = []
+    if year_col:
+        MAIN_SLOTS.append(("year",      year_col))
+    if has_codebook:
+        if not geo_map.empty:
+            MAIN_SLOTS.append(("cb_region",   "rv_cb_region"))
+            MAIN_SLOTS.append(("cb_farm",     "rv_cb_farm"))
+            MAIN_SLOTS.append(("cb_div",      "rv_cb_div"))
+        if not culture_map.empty:
+            MAIN_SLOTS.append(("cb_culture",  "rv_cb_culture"))
+        if not feed_map.empty:
+            MAIN_SLOTS.append(("cb_feedtype", "rv_cb_feedtype"))
+    if kod_col:
+        MAIN_SLOTS.append(("kodировка",  kod_col))
+
+    current_filtered = df.copy()
+
+    if MAIN_SLOTS:
+        main_ui = st.columns(len(MAIN_SLOTS))
+
+        for slot_idx, (slot_type, slot_data) in enumerate(MAIN_SLOTS):
+
+            # ── Год ──
+            if slot_type == "year":
+                col_name = slot_data
+                processed_cols.add(col_name)
+                result = create_year_filter(col_name, main_ui, slot_idx, current_filtered)
                 if result:
                     selected_filters[col_name] = result
-                    mask = current_filtered[col_name].astype(str).isin([str(v) for v in result])
+                    mask = _safe_str_series(current_filtered[col_name]).isin([str(v) for v in result])
                     current_filtered = current_filtered[mask].copy()
-            elif col_name in integer_cols:
-                result = create_int_filter(col_name, main_cols_ui, idx, current_filtered, df)
+
+            # ── Кодировочные фильтры ──
+            elif slot_type == "cb_region":
+                # Каскадно: опции из гео-справочника
+                regions = ["Все"] + sorted(geo_map["Регион"].dropna().unique().tolist())
+                _cb_val = _cb_select(main_ui[slot_idx], "Регион", regions, "rv_cb_region",
+                                     help=HELPS["codebook"])
+                if _cb_val != "Все":
+                    # Находим Хозяйства этого Региона → ограничим следующий фильтр
+                    st.session_state["_rv_cb_region_val"] = _cb_val
+                    # Фильтруем df по столбцу «Регион» если он есть
+                    if "Регион" in current_filtered.columns:
+                        current_filtered = current_filtered[
+                            _safe_str_series(current_filtered["Регион"]) == _cb_val
+                        ].copy()
+                        selected_filters["Регион"] = [_cb_val]
+                        processed_cols.add("Регион")
+                else:
+                    st.session_state["_rv_cb_region_val"] = None
+
+            elif slot_type == "cb_farm":
+                region_val = st.session_state.get("_rv_cb_region_val")
+                if region_val and not geo_map.empty:
+                    sub_geo = geo_map[geo_map["Регион"] == region_val]
+                    farms = ["Все"] + sorted(sub_geo["Хозяйство"].dropna().unique().tolist())
+                else:
+                    farms = ["Все"] + sorted(geo_map["Хозяйство"].dropna().unique().tolist())
+                _cb_val = _cb_select(main_ui[slot_idx], "Хозяйство", farms, "rv_cb_farm")
+                if _cb_val != "Все":
+                    st.session_state["_rv_cb_farm_val"] = _cb_val
+                    if "Хозяйство" in current_filtered.columns:
+                        current_filtered = current_filtered[
+                            _safe_str_series(current_filtered["Хозяйство"]) == _cb_val
+                        ].copy()
+                        selected_filters["Хозяйство"] = [_cb_val]
+                        processed_cols.add("Хозяйство")
+                else:
+                    st.session_state["_rv_cb_farm_val"] = None
+
+            elif slot_type == "cb_div":
+                farm_val   = st.session_state.get("_rv_cb_farm_val")
+                region_val = st.session_state.get("_rv_cb_region_val")
+                sub_geo = geo_map
+                if farm_val and not geo_map.empty:
+                    sub_geo = geo_map[geo_map["Хозяйство"] == farm_val]
+                elif region_val and not geo_map.empty:
+                    sub_geo = geo_map[geo_map["Регион"] == region_val]
+                divs = ["Все"] + sorted(sub_geo["Подразделение"].dropna().unique().tolist())
+                _cb_val = _cb_select(main_ui[slot_idx], "Подразделение", divs, "rv_cb_div")
+                if _cb_val != "Все":
+                    if "Подразделение" in current_filtered.columns:
+                        current_filtered = current_filtered[
+                            _safe_str_series(current_filtered["Подразделение"]) == _cb_val
+                        ].copy()
+                        selected_filters["Подразделение"] = [_cb_val]
+                        processed_cols.add("Подразделение")
+
+            elif slot_type == "cb_culture":
+                cultures = ["Все"] + sorted(culture_map.dropna().unique().tolist())
+                _cb_val = _cb_select(main_ui[slot_idx], "Культура", cultures, "rv_cb_culture")
+                if _cb_val != "Все":
+                    # Ищем столбец «Культура» в df
+                    culture_col = next(
+                        (c for c in current_filtered.columns if c.lower() == "культура"), None
+                    )
+                    if culture_col:
+                        current_filtered = current_filtered[
+                            _safe_str_series(current_filtered[culture_col]) == _cb_val
+                        ].copy()
+                        selected_filters[culture_col] = [_cb_val]
+                        processed_cols.add(culture_col)
+
+            elif slot_type == "cb_feedtype":
+                feed_types = ["Все"] + sorted(feed_map.dropna().unique().tolist())
+                _cb_val = _cb_select(main_ui[slot_idx], "Тип корма", feed_types,
+                                     "rv_cb_feedtype")
+                if _cb_val != "Все" and kod_col and kod_col in current_filtered.columns:
+                    # Найдём коды для данного типа корма
+                    matching_codes = {
+                        str(code) for code, name in feed_map.items()
+                        if str(name) == str(_cb_val)
+                    }
+                    def _match_feed(code_val, codes=matching_codes):
+                        try:
+                            parts = str(code_val).strip().split(".")
+                            return len(parts) == 6 and parts[3] in codes
+                        except Exception:
+                            return False
+                    mask = current_filtered[kod_col].apply(_match_feed)
+                    current_filtered = current_filtered[mask].copy()
+
+            # ── Кодировка (raw multiselect) ──
+            elif slot_type == "kodировка":
+                col_name = slot_data
+                processed_cols.add(col_name)
+                result = create_text_filter(col_name, main_ui, slot_idx, current_filtered)
                 if result:
-                    numeric_filters[col_name] = result
-                    mn, mx = result
-                    current_filtered = current_filtered[
-                        (current_filtered[col_name] >= mn) & (current_filtered[col_name] <= mx)
-                    ].copy()
-    else:
-        current_filtered = df.copy()
+                    selected_filters[col_name] = result
+                    mask = _safe_str_series(current_filtered[col_name]).isin([str(v) for v in result])
+                    current_filtered = current_filtered[mask].copy()
+
+    # Помечаем основные колонки как обработанные
+    for c in ("Регион", "Хозяйство", "Подразделение", "Культура"):
+        processed_cols.add(c)
 
     st.markdown("---")
 
-    # ── CSS для группы фильтров ──────────────────────────────────
+    # ── CSS для групп фильтров ────────────────────────────────────
     st.markdown("""
         <style>
         .streamlit-expanderContent div[data-testid="stSelectbox"] label,
@@ -191,115 +352,76 @@ def render_reestr_visualisation():
         </style>
     """, unsafe_allow_html=True)
 
-    # ── Группы фильтров ──────────────────────────────────────────
+    # ── Дополнительные фильтры (один коллапс) ────────────────────
+    group_sections: dict[str, list] = {}
     for group_name, group_cols_list in FILTER_GROUPS.items():
         available = [c for c in group_cols_list if c in df.columns and c not in processed_cols]
         available_sorted = [c for c in cascade_order if c in available]
         for c in available:
             if c not in available_sorted:
                 available_sorted.append(c)
-
         if available_sorted:
-            with st.expander(group_name, expanded=False):
-                for row_start in range(0, len(available_sorted), 3):
-                    row_cols = st.columns(3)
-                    for i in range(3):
-                        idx = row_start + i
-                        if idx < len(available_sorted):
-                            col = available_sorted[idx]
-                            processed_cols.add(col)
-                            _apply_filter(col, row_cols, i, current_filtered, df,
-                                          text_cols, integer_cols, float_cols,
-                                          selected_filters, numeric_filters)
+            group_sections[group_name] = available_sorted
+            for c in available_sorted:
+                processed_cols.add(c)
 
-    # ── Прочие фильтры ───────────────────────────────────────────
     remaining = [c for c in text_cols + integer_cols + float_cols if c not in processed_cols]
     remaining_sorted = [c for c in cascade_order if c in remaining]
     for c in remaining:
         if c not in remaining_sorted:
             remaining_sorted.append(c)
+    for c in remaining_sorted:
+        processed_cols.add(c)
 
-    if remaining_sorted:
-        with st.expander(f"Прочие фильтры ({len(remaining_sorted)})", expanded=False):
-            for row_start in range(0, len(remaining_sorted), 3):
-                row_cols = st.columns(3)
-                for i in range(3):
-                    idx = row_start + i
-                    if idx < len(remaining_sorted):
-                        col = remaining_sorted[idx]
-                        processed_cols.add(col)
-                        _apply_filter(col, row_cols, i, current_filtered, df,
-                                      text_cols, integer_cols, float_cols,
-                                      selected_filters, numeric_filters)
+    total_extra = sum(len(v) for v in group_sections.values()) + len(remaining_sorted)
+    if total_extra > 0:
+        with st.expander(f"Дополнительные фильтры ({total_extra})", expanded=False):
+            cf_inner = current_filtered.copy()
 
-    # ── Применение фильтров и валидация ──────────────────────────
-    filtered_df = _validate_and_apply(
-        df, selected_filters, numeric_filters
-    )
+            for group_name, gcols in group_sections.items():
+                st.markdown(f"**{group_name}**")
+                for row_start in range(0, len(gcols), 3):
+                    row_ui = st.columns(3)
+                    for i in range(3):
+                        idx = row_start + i
+                        if idx < len(gcols):
+                            col = gcols[idx]
+                            cf_inner = _apply_filter_cascading(
+                                col, row_ui, i, cf_inner, df,
+                                text_cols, integer_cols, float_cols,
+                                selected_filters, numeric_filters,
+                            )
+                st.markdown("")
 
-    # ── Визуализация ─────────────────────────────────────────────
-    st.markdown("---")
-    st.subheader("Визуализация данных")
+            if remaining_sorted:
+                st.markdown("**Прочие**")
+                for row_start in range(0, len(remaining_sorted), 3):
+                    row_ui = st.columns(3)
+                    for i in range(3):
+                        idx = row_start + i
+                        if idx < len(remaining_sorted):
+                            col = remaining_sorted[idx]
+                            cf_inner = _apply_filter_cascading(
+                                col, row_ui, i, cf_inner, df,
+                                text_cols, integer_cols, float_cols,
+                                selected_filters, numeric_filters,
+                            )
 
-    chart_type = st.selectbox(
-        "Тип графика",
-        ["Столбчатая диаграмма", "Линейный график", "Точечная диаграмма",
-         "Гистограмма", "Круговая диаграмма"],
-        key="rv_chart_type",
-    )
+    # ── Применение всех фильтров ──────────────────────────────────
+    # Кодировочные фильтры уже учтены через selected_filters (Регион/Хозяйство/Подразделение/Культура)
+    # + фильтр Тип корма применён через current_filtered, но нам нужно отразить это в итоге.
+    # Используем current_filtered как базу и применяем поверх selected_filters + numeric_filters.
+    filtered_df = _validate_and_apply(current_filtered, selected_filters, numeric_filters,
+                                      original_len=len(df))
 
-    c1, c2 = st.columns(2)
-    with c1:
-        x_column = st.selectbox("По горизонтали", options=list(df.columns),
-                                key="rv_x_col")
-    with c2:
-        if chart_type != "Гистограмма":
-            y_column = st.selectbox("По вертикали",
-                                    options=numeric_cols if numeric_cols else list(df.columns),
-                                    key="rv_y_col")
-        else:
-            y_column = None
-
-    agg_type = None
-    if chart_type != "Гистограмма":
-        agg_type = st.selectbox(
-            "Тип агрегации",
-            ["Нет", "Сумма", "Среднее", "Медиана", "Количество", "Минимум", "Максимум"],
-            key="rv_agg_type",
-        )
-        if agg_type == "Нет":
-            agg_type = None
-
-    color_column = None
-    if chart_type in ("Столбчатая диаграмма", "Линейный график", "Точечная диаграмма"):
-        color_column = st.selectbox(
-            "Столбец для группировки (цвет)",
-            options=["Нет"] + text_cols[:10],
-            key="rv_color_col",
-        )
-
-    if st.button("Построить график", type="primary", key="rv_build_chart"):
-        try:
-            fig = build_chart(chart_type, filtered_df, x_column, y_column,
-                              color_column, agg_type)
-            if fig:
-                st.session_state["rv_chart_fig"] = fig
-            else:
-                st.session_state["rv_chart_fig"] = None
-                st.warning("Невозможно построить график с выбранными параметрами.")
-        except Exception as e:
-            st.session_state["rv_chart_fig"] = None
-            st.error(f"Ошибка при построении графика: {e}")
-
-    if st.session_state.get("rv_chart_fig"):
-        st.plotly_chart(st.session_state["rv_chart_fig"], width='stretch')
-
-    # ── Таблица данных ───────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════
+    # ── ТАБЛИЦА ДАННЫХ ────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════
     st.markdown("---")
     st.subheader("Таблица данных")
-    st.dataframe(filtered_df, width='stretch', height=400)
+    st.caption(f"Показано {len(filtered_df)} из {len(df)} строк")
+    st.dataframe(filtered_df, use_container_width=True, height=320)
 
-    # ── Статистика ───────────────────────────────────────────────
     with st.expander("Статистика по числовым показателям", expanded=False):
         if numeric_cols:
             avail_numeric = [c for c in numeric_cols if c in filtered_df.columns]
@@ -311,80 +433,256 @@ def render_reestr_visualisation():
                     '25%': '25% (квартиль)', '50%': '50% (медиана)',
                     '75%': '75% (квартиль)', 'max': 'Максимум',
                 })
-                stats_t = stats.T
-                fmt = stats_t.copy()
-                for col in fmt.columns:
-                    if col == 'Количество':
-                        fmt[col] = fmt[col].apply(
-                            lambda x: f"{int(x)}" if pd.notna(x) else "")
-                    else:
-                        fmt[col] = fmt[col].apply(
-                            lambda x: f"{x:.2f}" if pd.notna(x) and abs(x) < 1000
-                            else f"{x:.0f}" if pd.notna(x) else "")
-                st.dataframe(fmt, width='stretch')
+                st.dataframe(stats.T, use_container_width=True)
             else:
                 st.info("Нет числовых столбцов для статистики")
         else:
             st.info("Нет числовых столбцов для статистики")
 
+    # ══════════════════════════════════════════════════════════════
+    # ── ВИЗУАЛИЗАЦИЯ ─────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.subheader("Визуализация данных")
+
+    chart_type = st.selectbox(
+        "Тип графика", CHART_TYPES, key="rv_chart_type", help=HELPS["chart_type"],
+    )
+
+    is_hybrid = st.checkbox(
+        "Гибридный график (несколько метрик)", key="rv_is_hybrid", help=HELPS["hybrid"],
+    )
+
+    x_label, y_label = AXIS_LABELS.get(chart_type, ("По горизонтали", "По вертикали"))
+
+    c1, c2 = st.columns(2)
+    with c1:
+        x_column = st.selectbox(
+            x_label or "По горизонтали",
+            options=list(df.columns), key="rv_x_col", help=HELPS["x_col"],
+        )
+
+    y_column = None
+    if not is_hybrid and chart_type != "Гистограмма" and y_label:
+        with c2:
+            y_column = st.selectbox(
+                y_label,
+                options=numeric_cols if numeric_cols else list(df.columns),
+                key="rv_y_col", help=HELPS["y_col"],
+            )
+
+    agg_type = None
+    if not is_hybrid and chart_type in SUPPORTS_AGG:
+        agg_type = st.selectbox(
+            "Агрегация", AGG_OPTIONS, index=0, key="rv_agg_type", help=HELPS["agg_type"],
+        )
+
+    bar_mode = "stack"
+    if chart_type == "Столбчатая диаграмма" and not is_hybrid:
+        bm_choice = st.radio(
+            "Режим столбцов", ["Накопление", "Без накопления"],
+            horizontal=True, key="rv_bar_mode", help=HELPS["bar_mode"],
+        )
+        bar_mode = "stack" if bm_choice == "Накопление" else "group"
+
+    color_column = None
+    if not is_hybrid and chart_type in SUPPORTS_COLOR:
+        color_column = st.selectbox(
+            "Цвет / группировка",
+            options=["Нет"] + color_candidates,
+            key="rv_color_col", help=HELPS["color_col"],
+        )
+
+    show_trend = False
+    if not is_hybrid and chart_type in SUPPORTS_TREND:
+        show_trend = st.checkbox(
+            "Показать линию тренда", key="rv_show_trend", help=HELPS["show_trend"],
+        )
+
+    # ── Гибридные метрики ─────────────────────────────────────────
+    if is_hybrid:
+        st.markdown("#### Метрики")
+        st.caption("Добавьте метрики: для каждой выберите столбец, агрегацию и тип.")
+
+        if "rv_hybrid_metrics" not in st.session_state:
+            st.session_state["rv_hybrid_metrics"] = [
+                {"y": "", "agg": "Среднее", "type": "Линия"}
+            ]
+
+        metrics_state = st.session_state["rv_hybrid_metrics"]
+        colors_palette = _px.colors.qualitative.Plotly
+
+        col_add, col_clear = st.columns(2)
+        with col_add:
+            if st.button("➕ Добавить метрику", key="rv_add_metric"):
+                metrics_state.append({"y": "", "agg": "Среднее", "type": "Линия"})
+                st.rerun()
+        with col_clear:
+            if st.button("🗑 Очистить всё", key="rv_clear_metrics"):
+                st.session_state["rv_hybrid_metrics"] = [
+                    {"y": "", "agg": "Среднее", "type": "Линия"}
+                ]
+                st.rerun()
+
+        to_delete = None
+        for i, m in enumerate(metrics_state):
+            with st.expander(f"Метрика {i + 1}: {m.get('y', '—')}", expanded=(i == 0)):
+                mc1, mc2, mc3, mc4 = st.columns([3, 2, 2, 1])
+                with mc1:
+                    y_opts = numeric_cols if numeric_cols else list(df.columns)
+                    cur_y = m.get("y", "")
+                    y_idx = y_opts.index(cur_y) if cur_y in y_opts else 0
+                    m["y"] = st.selectbox("Столбец (Y)", y_opts, index=y_idx,
+                                          key=f"rv_metric_y_{i}")
+                with mc2:
+                    cur_agg = m.get("agg", "Среднее")
+                    agg_idx = AGG_OPTIONS.index(cur_agg) if cur_agg in AGG_OPTIONS else 0
+                    m["agg"] = st.selectbox("Агрегация", AGG_OPTIONS, index=agg_idx,
+                                            key=f"rv_metric_agg_{i}")
+                with mc3:
+                    cur_t = m.get("type", "Линия")
+                    t_idx = HYBRID_CHART_TYPES.index(cur_t) if cur_t in HYBRID_CHART_TYPES else 0
+                    m["type"] = st.selectbox("Тип", HYBRID_CHART_TYPES, index=t_idx,
+                                             key=f"rv_metric_type_{i}")
+                with mc4:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("✖", key=f"rv_del_metric_{i}", help="Удалить метрику"):
+                        to_delete = i
+                m["color"] = colors_palette[i % len(colors_palette)]
+
+        if to_delete is not None:
+            metrics_state.pop(to_delete)
+            st.rerun()
+
+        st.session_state["rv_hybrid_metrics"] = metrics_state
+
+        # Галочка Разделить оси y (если выбрано ровно 2 метрики)
+        if len(metrics_state) == 2:
+            st.checkbox(
+                "Разделить оси Y (шкалы слева и справа)",
+                value=True,
+                key="rv_split_y",
+                help="Если выбрано 2 метрики, их можно отобразить на разных осях с разными масштабами."
+            )
+
+    # ── Построить ─────────────────────────────────────────────────
+    if st.button("📊 Построить график", type="primary", key="rv_build_chart"):
+        try:
+            if is_hybrid:
+                metrics = st.session_state.get("rv_hybrid_metrics", [])
+                split_y = st.session_state.get("rv_split_y", True) if len(metrics) == 2 else False
+                fig = build_hybrid_chart(
+                    filtered_df, x_column,
+                    metrics,
+                    split_y=split_y
+                )
+            else:
+                fig = build_chart(
+                    chart_type, filtered_df, x_column, y_column,
+                    color_column, agg_type,
+                    bar_mode=bar_mode,
+                    show_trend=show_trend,
+                )
+            if fig:
+                st.session_state["rv_chart_fig"] = fig
+            else:
+                st.session_state["rv_chart_fig"] = None
+                st.warning("Невозможно построить график с выбранными параметрами.")
+        except Exception as e:
+            st.session_state["rv_chart_fig"] = None
+            st.error(f"Ошибка при построении графика: {e}")
+
+    if st.session_state.get("rv_chart_fig"):
+        st.plotly_chart(st.session_state["rv_chart_fig"], use_container_width=True)
+
 
 # ── Вспомогательные функции ──────────────────────────────────────
 
-def _apply_filter(col, row_cols, i, options_df, full_df,
-                  text_cols, integer_cols, float_cols,
-                  selected_filters, numeric_filters):
-    """Создаёт фильтр нужного типа и сохраняет выбор. Не мутирует DataFrame."""
+def _cb_select(col_container, label: str, options: list, key: str,
+               help: str | None = None) -> str:
+    """Отображает selectbox кодировочного фильтра и возвращает выбранное значение."""
+    with col_container:
+        prev = st.session_state.get(key, "Все")
+        if prev not in options:
+            prev = "Все"
+        return st.selectbox(
+            label, options, index=options.index(prev), key=key, help=help,
+        )
+
+
+def _apply_filter_cascading(col, row_cols, i,
+                             current_filtered: pd.DataFrame,
+                             full_df: pd.DataFrame,
+                             text_cols, integer_cols, float_cols,
+                             selected_filters, numeric_filters) -> pd.DataFrame:
+    """
+    Создаёт фильтр, сохраняет выбор и возвращает обновлённый current_filtered.
+    Каскадность: каждый следующий фильтр видит данные,
+    уже отфильтрованные предыдущими.
+    """
     if col in text_cols:
-        result = create_text_filter(col, row_cols, i, options_df)
+        result = create_text_filter(col, row_cols, i, current_filtered)
         if result:
             selected_filters[col] = result
+            mask = _safe_str_series(current_filtered[col]).isin([str(v) for v in result])
+            current_filtered = current_filtered[mask].copy()
     elif col in integer_cols:
-        result = create_int_filter(col, row_cols, i, options_df, full_df)
+        result = create_int_filter(col, row_cols, i, current_filtered, full_df)
         if result:
             numeric_filters[col] = result
+            mn, mx = result
+            current_filtered = current_filtered[
+                (current_filtered[col] >= mn) & (current_filtered[col] <= mx)
+            ].copy()
     elif col in float_cols:
-        result = create_float_filter(col, row_cols, i, options_df, full_df)
+        result = create_float_filter(col, row_cols, i, current_filtered, full_df)
         if result:
             numeric_filters[col] = result
+            mn, mx = result
+            current_filtered = current_filtered[
+                (current_filtered[col] >= mn) & (current_filtered[col] <= mx)
+            ].copy()
+    return current_filtered
 
 
-def _validate_and_apply(df, selected_filters, numeric_filters):
-    """Валидирует фильтры и возвращает отфильтрованный DataFrame.
-
-    Все фильтры применяются к оригинальному df, чтобы
-    очистка любого фильтра корректно расширяла результат.
+def _validate_and_apply(base_df: pd.DataFrame, selected_filters: dict,
+                        numeric_filters: dict, original_len: int = None) -> pd.DataFrame:
     """
-    # Проверяем, есть ли активные фильтры
+    Применяет selected_filters + numeric_filters к base_df.
+    base_df уже содержит кодировочные фильтры (Регион, Хозяйство и т.д.).
+    """
     has_active = bool(selected_filters)
     if not has_active:
         for col, (mn, mx) in numeric_filters.items():
-            if col in df.columns:
-                cd = df[col].dropna()
+            if col in base_df.columns:
+                cd = base_df[col].dropna()
                 if len(cd) > 0:
                     if mn != float(cd.min()) or mx != float(cd.max()):
                         has_active = True
                         break
 
     if not has_active:
-        return df.copy()
+        if original_len and len(base_df) < original_len:
+            st.success(f"✅ Отфильтровано строк: {len(base_df)} из {original_len}")
+        return base_df.copy()
 
-    # Применяем ВСЕ фильтры к оригинальному DataFrame
-    temp = df.copy()
+    temp = base_df.copy()
     for col, values in selected_filters.items():
-        if values:
-            temp = temp[temp[col].astype(str).isin([str(v) for v in values])]
+        if values and col in temp.columns:
+            temp = temp[_safe_str_series(temp[col]).isin([str(v) for v in values])]
     for col, (mn, mx) in numeric_filters.items():
-        if mn <= mx:
+        if mn <= mx and col in temp.columns:
             temp = temp[(temp[col] >= mn) & (temp[col] <= mx)]
 
+    total = original_len or len(base_df)
+
     if len(temp) == 0:
-        # Диагностика
         problematic = []
         problematic_cols = []
-        test_df = df.copy()
+        test_df = base_df.copy()
         for col, values in selected_filters.items():
-            if values:
-                t = test_df[test_df[col].astype(str).isin([str(v) for v in values])]
+            if values and col in test_df.columns:
+                t = test_df[_safe_str_series(test_df[col]).isin([str(v) for v in values])]
                 if len(t) == 0:
                     vals_str = ', '.join(map(str, values[:3]))
                     if len(values) > 3:
@@ -394,7 +692,7 @@ def _validate_and_apply(df, selected_filters, numeric_filters):
                 else:
                     test_df = t
         for col, (mn, mx) in numeric_filters.items():
-            if mn <= mx:
+            if mn <= mx and col in test_df.columns:
                 t = test_df[(test_df[col] >= mn) & (test_df[col] <= mx)]
                 if len(t) == 0:
                     problematic.append(f"**{col}**: от {mn} до {mx}")
@@ -403,19 +701,15 @@ def _validate_and_apply(df, selected_filters, numeric_filters):
                     test_df = t
 
         if problematic:
-            msg = "⚠️ **Комбинация фильтров не дала результатов.**\n\n"
-            msg += "**Проблемные фильтры:**\n"
+            msg = "⚠️ **Комбинация фильтров не дала результатов.**\n\n**Проблемные:**\n"
             for p in problematic:
                 msg += f"- {p}\n"
             st.markdown(msg)
-            if st.button("Исправить", key="rv_fix_filters",
-                         help="Сбросит проблемные фильтры"):
+            if st.button("Исправить", key="rv_fix_filters", help="Сбросит проблемные фильтры"):
                 fix_filters_automatically(problematic_cols)
 
-        st.error(f"Результат пуст: отфильтровано 0 из {len(df)} строк")
+        st.error(f"Результат пуст: отфильтровано 0 из {total} строк")
     else:
-        st.success(
-            f"✅ Отфильтровано строк: {len(temp)} из {len(df)}"
-        )
+        st.success(f"✅ Отфильтровано строк: {len(temp)} из {total}")
 
     return temp
