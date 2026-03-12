@@ -183,7 +183,7 @@ def render_reestr_visualisation():
     with hc2:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("Сбросить фильтры", key="rv_reset_all",
-                     help="Сбросит все фильтры", use_container_width=True):
+                     help="Сбросит все фильтры", width='stretch'):
             reset_all_filters(df)
 
     selected_filters: dict[str, list] = {}
@@ -416,7 +416,7 @@ def render_reestr_visualisation():
     st.markdown("---")
     st.subheader("Таблица данных")
     st.caption(f"Показано {len(filtered_df)} из {len(df)} строк")
-    st.dataframe(filtered_df, use_container_width=True, height=320)
+    st.dataframe(filtered_df, width='stretch', height=320)
 
     with st.expander("Статистика по числовым показателям", expanded=False):
         if numeric_cols:
@@ -429,7 +429,7 @@ def render_reestr_visualisation():
                     '25%': '25% (квартиль)', '50%': '50% (медиана)',
                     '75%': '75% (квартиль)', 'max': 'Максимум',
                 })
-                st.dataframe(stats.T, use_container_width=True)
+                st.dataframe(stats.T, width='stretch')
             else:
                 st.info("Нет числовых столбцов для статистики")
         else:
@@ -592,7 +592,7 @@ def render_reestr_visualisation():
             st.error(f"Ошибка при построении графика: {e}")
 
     if st.session_state.get("rv_chart_fig"):
-        st.plotly_chart(st.session_state["rv_chart_fig"], use_container_width=True)
+        st.plotly_chart(st.session_state["rv_chart_fig"], width='stretch')
 
 
 # ── Вспомогательные функции ──────────────────────────────────────
