@@ -281,6 +281,11 @@ def reset_all_filters(df: pd.DataFrame):
     for key in list(st.session_state.keys()):
         if key.startswith('rv_filter_text_'):
             st.session_state[key] = []
+        elif key.startswith(('rv_cb_region', 'rv_cb_farm', 'rv_cb_div',
+                             'rv_cb_culture', 'rv_cb_feedtype')):
+            st.session_state[key] = []
+        elif key.startswith('_rv_cb_'):
+            st.session_state[key] = None
         elif key.startswith(('rv_filter_year_from_', 'rv_filter_year_to_',
                              'rv_codebook_')):
             del st.session_state[key]

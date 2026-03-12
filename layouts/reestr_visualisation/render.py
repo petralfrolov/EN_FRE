@@ -236,83 +236,79 @@ def render_reestr_visualisation():
             # ── Кодировочные фильтры ──
             elif slot_type == "cb_region":
                 # Каскадно: опции из гео-справочника
-                regions = ["Все"] + sorted(geo_map["Регион"].dropna().unique().tolist())
-                _cb_val = _cb_select(main_ui[slot_idx], "Регион", regions, "rv_cb_region",
-                                     help=HELPS["codebook"])
-                if _cb_val != "Все":
-                    # Находим Хозяйства этого Региона → ограничим следующий фильтр
-                    st.session_state["_rv_cb_region_val"] = _cb_val
-                    # Фильтруем df по столбцу «Регион» если он есть
+                regions = sorted(geo_map["Регион"].dropna().unique().tolist())
+                _cb_vals = _cb_multiselect(main_ui[slot_idx], "Регион", regions, "rv_cb_region",
+                                           help=HELPS["codebook"])
+                if _cb_vals:
+                    st.session_state["_rv_cb_region_vals"] = _cb_vals
                     if "Регион" in current_filtered.columns:
                         current_filtered = current_filtered[
-                            _safe_str_series(current_filtered["Регион"]) == _cb_val
+                            _safe_str_series(current_filtered["Регион"]).isin([str(v) for v in _cb_vals])
                         ].copy()
-                        selected_filters["Регион"] = [_cb_val]
+                        selected_filters["Регион"] = _cb_vals
                         processed_cols.add("Регион")
                 else:
-                    st.session_state["_rv_cb_region_val"] = None
+                    st.session_state["_rv_cb_region_vals"] = None
 
             elif slot_type == "cb_farm":
-                region_val = st.session_state.get("_rv_cb_region_val")
-                if region_val and not geo_map.empty:
-                    sub_geo = geo_map[geo_map["Регион"] == region_val]
-                    farms = ["Все"] + sorted(sub_geo["Хозяйство"].dropna().unique().tolist())
+                region_vals = st.session_state.get("_rv_cb_region_vals")
+                if region_vals and not geo_map.empty:
+                    sub_geo = geo_map[geo_map["Регион"].isin(region_vals)]
+                    farms = sorted(sub_geo["Хозяйство"].dropna().unique().tolist())
                 else:
-                    farms = ["Все"] + sorted(geo_map["Хозяйство"].dropna().unique().tolist())
-                _cb_val = _cb_select(main_ui[slot_idx], "Хозяйство", farms, "rv_cb_farm")
-                if _cb_val != "Все":
-                    st.session_state["_rv_cb_farm_val"] = _cb_val
+                    farms = sorted(geo_map["Хозяйство"].dropna().unique().tolist())
+                _cb_vals = _cb_multiselect(main_ui[slot_idx], "Хозяйство", farms, "rv_cb_farm")
+                if _cb_vals:
+                    st.session_state["_rv_cb_farm_vals"] = _cb_vals
                     if "Хозяйство" in current_filtered.columns:
                         current_filtered = current_filtered[
-                            _safe_str_series(current_filtered["Хозяйство"]) == _cb_val
+                            _safe_str_series(current_filtered["Хозяйство"]).isin([str(v) for v in _cb_vals])
                         ].copy()
-                        selected_filters["Хозяйство"] = [_cb_val]
+                        selected_filters["Хозяйство"] = _cb_vals
                         processed_cols.add("Хозяйство")
                 else:
-                    st.session_state["_rv_cb_farm_val"] = None
+                    st.session_state["_rv_cb_farm_vals"] = None
 
             elif slot_type == "cb_div":
-                farm_val   = st.session_state.get("_rv_cb_farm_val")
-                region_val = st.session_state.get("_rv_cb_region_val")
+                farm_vals   = st.session_state.get("_rv_cb_farm_vals")
+                region_vals = st.session_state.get("_rv_cb_region_vals")
                 sub_geo = geo_map
-                if farm_val and not geo_map.empty:
-                    sub_geo = geo_map[geo_map["Хозяйство"] == farm_val]
-                elif region_val and not geo_map.empty:
-                    sub_geo = geo_map[geo_map["Регион"] == region_val]
-                divs = ["Все"] + sorted(sub_geo["Подразделение"].dropna().unique().tolist())
-                _cb_val = _cb_select(main_ui[slot_idx], "Подразделение", divs, "rv_cb_div")
-                if _cb_val != "Все":
+                if farm_vals and not geo_map.empty:
+                    sub_geo = geo_map[geo_map["Хозяйство"].isin(farm_vals)]
+                elif region_vals and not geo_map.empty:
+                    sub_geo = geo_map[geo_map["Регион"].isin(region_vals)]
+                divs = sorted(sub_geo["Подразделение"].dropna().unique().tolist())
+                _cb_vals = _cb_multiselect(main_ui[slot_idx], "Подразделение", divs, "rv_cb_div")
+                if _cb_vals:
                     if "Подразделение" in current_filtered.columns:
                         current_filtered = current_filtered[
-                            _safe_str_series(current_filtered["Подразделение"]) == _cb_val
+                            _safe_str_series(current_filtered["Подразделение"]).isin([str(v) for v in _cb_vals])
                         ].copy()
-                        selected_filters["Подразделение"] = [_cb_val]
+                        selected_filters["Подразделение"] = _cb_vals
                         processed_cols.add("Подразделение")
 
             elif slot_type == "cb_culture":
-                cultures = ["Все"] + sorted(culture_map.dropna().unique().tolist())
-                _cb_val = _cb_select(main_ui[slot_idx], "Культура", cultures, "rv_cb_culture")
-                if _cb_val != "Все":
-                    # Ищем столбец «Культура» в df
+                cultures = sorted(culture_map.dropna().unique().tolist())
+                _cb_vals = _cb_multiselect(main_ui[slot_idx], "Культура", cultures, "rv_cb_culture")
+                if _cb_vals:
                     culture_col = next(
                         (c for c in current_filtered.columns if c.lower() == "культура"), None
                     )
                     if culture_col:
                         current_filtered = current_filtered[
-                            _safe_str_series(current_filtered[culture_col]) == _cb_val
+                            _safe_str_series(current_filtered[culture_col]).isin([str(v) for v in _cb_vals])
                         ].copy()
-                        selected_filters[culture_col] = [_cb_val]
+                        selected_filters[culture_col] = _cb_vals
                         processed_cols.add(culture_col)
 
             elif slot_type == "cb_feedtype":
-                feed_types = ["Все"] + sorted(feed_map.dropna().unique().tolist())
-                _cb_val = _cb_select(main_ui[slot_idx], "Тип корма", feed_types,
-                                     "rv_cb_feedtype")
-                if _cb_val != "Все" and kod_col and kod_col in current_filtered.columns:
-                    # Найдём коды для данного типа корма
+                feed_types = sorted(feed_map.dropna().unique().tolist())
+                _cb_vals = _cb_multiselect(main_ui[slot_idx], "Тип корма", feed_types,
+                                           "rv_cb_feedtype")
+                if _cb_vals and kod_col and kod_col in current_filtered.columns:
                     matching_codes = {
                         str(code) for code, name in feed_map.items()
-                        if str(name) == str(_cb_val)
+                        if str(name) in [str(v) for v in _cb_vals]
                     }
                     def _match_feed(code_val, codes=matching_codes):
                         try:
@@ -477,14 +473,6 @@ def render_reestr_visualisation():
             "Агрегация", AGG_OPTIONS, index=0, key="rv_agg_type", help=HELPS["agg_type"],
         )
 
-    bar_mode = "stack"
-    if chart_type == "Столбчатая диаграмма" and not is_hybrid:
-        bm_choice = st.radio(
-            "Режим столбцов", ["Накопление", "Без накопления"],
-            horizontal=True, key="rv_bar_mode", help=HELPS["bar_mode"],
-        )
-        bar_mode = "stack" if bm_choice == "Накопление" else "group"
-
     color_column = None
     if not is_hybrid and chart_type in SUPPORTS_COLOR:
         color_column = st.selectbox(
@@ -492,6 +480,17 @@ def render_reestr_visualisation():
             options=["Нет"] + color_candidates,
             key="rv_color_col", help=HELPS["color_col"],
         )
+
+    bar_mode = "stack"
+    if chart_type == "Столбчатая диаграмма" and not is_hybrid:
+        bm_choice = st.radio(
+            "Режим столбцов", ["Накопление", "Без накопления"],
+            horizontal=True, key="rv_bar_mode", help=HELPS["bar_mode"],
+        )
+        bar_mode = "stack" if bm_choice == "Накопление" else "group"
+        if bar_mode == "group" and (not color_column or color_column == "Нет"):
+            st.info("ℹ️ Режим «Без накопления» работает только при выбранной "
+                    "группировке (Цвет / группировка ≠ Нет).")
 
     show_trend = False
     if not is_hybrid and chart_type in SUPPORTS_TREND:
@@ -598,15 +597,19 @@ def render_reestr_visualisation():
 
 # ── Вспомогательные функции ──────────────────────────────────────
 
-def _cb_select(col_container, label: str, options: list, key: str,
-               help: str | None = None) -> str:
-    """Отображает selectbox кодировочного фильтра и возвращает выбранное значение."""
+def _cb_multiselect(col_container, label: str, options: list, key: str,
+                    help: str | None = None) -> list:
+    """Отображает multiselect кодировочного фильтра и возвращает список выбранных значений."""
     with col_container:
-        prev = st.session_state.get(key, "Все")
-        if prev not in options:
-            prev = "Все"
-        return st.selectbox(
-            label, options, index=options.index(prev), key=key, help=help,
+        prev_val = st.session_state.get(key, [])
+        # Если старый формат (строка от selectbox), конвертируем
+        if isinstance(prev_val, str):
+            prev_val = [prev_val] if prev_val and prev_val != "Все" else []
+        # Убираем значения, которых нет в текущих опциях
+        valid = [v for v in prev_val if v in options]
+        st.session_state[key] = valid
+        return st.multiselect(
+            label, options, key=key, help=help,
         )
 
 

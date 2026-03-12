@@ -118,6 +118,12 @@ def build_chart(
     else:
         plot_df = filtered_df.copy()
 
+    # Приводим color-столбец к строке, чтобы Plotly считал его категориальным
+    # (иначе числовые столбцы вроде «Год» трактуются как непрерывная шкала
+    #  и barmode='group' не отображает столбцы рядом)
+    if color and color in plot_df.columns:
+        plot_df[color] = plot_df[color].astype(str).str.replace(r'\.0$', '', regex=True)
+
     # ── Графики ───────────────────────────────────────────────────
     fig = None
 
@@ -175,7 +181,8 @@ def build_chart(
     if fig is None:
         return None
 
-    fig.update_layout(height=520, font=dict(size=12))
+    fig.update_layout(height=520, font=dict(size=12),
+                       **({"barmode": bar_mode} if chart_type == "Столбчатая диаграмма" else {}))
     return fig
 
 
