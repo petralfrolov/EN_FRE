@@ -213,10 +213,13 @@ def create_int_filter(col: str, cols_container, col_index: int,
         if prev_min > prev_max:
             prev_min, prev_max = cur_min, cur_max
 
-        min_val = st.number_input("От", min_value=base_min, max_value=base_max,
-                                  value=prev_min, step=1, key=min_key)
-        max_val = st.number_input("До", min_value=base_min, max_value=base_max,
-                                  value=prev_max, step=1, key=max_key)
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            min_val = st.number_input("От", min_value=base_min, max_value=base_max,
+                                      value=prev_min, step=1, key=min_key)
+        with fc2:
+            max_val = st.number_input("До", min_value=base_min, max_value=base_max,
+                                      value=prev_max, step=1, key=max_key)
 
         if min_val > max_val:
             st.error(f"Ошибка: 'От' ({min_val}) > 'До' ({max_val})")
@@ -266,12 +269,15 @@ def create_float_filter(col: str, cols_container, col_index: int,
         if prev_min > prev_max:
             prev_min, prev_max = cur_min, cur_max
 
-        min_val = st.number_input("От", min_value=float(base_min), max_value=float(base_max),
-                                  value=float(prev_min), step=step, format="%.2f",
-                                  key=min_key)
-        max_val = st.number_input("До", min_value=float(base_min), max_value=float(base_max),
-                                  value=float(prev_max), step=step, format="%.2f",
-                                  key=max_key)
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            min_val = st.number_input("От", min_value=float(base_min), max_value=float(base_max),
+                                      value=float(prev_min), step=step, format="%.2f",
+                                      key=min_key)
+        with fc2:
+            max_val = st.number_input("До", min_value=float(base_min), max_value=float(base_max),
+                                      value=float(prev_max), step=step, format="%.2f",
+                                      key=max_key)
 
         if min_val > max_val:
             st.error(f"Ошибка: 'От' ({min_val:.2f}) > 'До' ({max_val:.2f})")
