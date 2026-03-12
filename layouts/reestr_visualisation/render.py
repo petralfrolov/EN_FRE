@@ -58,6 +58,13 @@ def _safe_str_series(series: pd.Series) -> pd.Series:
     """Безопасное преобразование столбца в строку (убирает .0 у целых чисел)."""
     return series.astype(str).str.replace(r'\.0$', '', regex=True)
 
+def _isin_case_insensitive(series: pd.Series, values: list) -> pd.Series:
+    """Проверка вхождения значений в столбец без учета регистра."""
+    if not values:
+        return pd.Series(True, index=series.index)
+    vals_lower = [str(v).lower() for v in values]
+    return _safe_str_series(series).str.lower().isin(vals_lower)
+
 def render_reestr_visualisation():
     """Основная функция рендеринга вкладки «Визуализация реестра»."""
 
@@ -230,7 +237,7 @@ def render_reestr_visualisation():
                 result = create_year_filter(col_name, main_ui, slot_idx, current_filtered)
                 if result:
                     selected_filters[col_name] = result
-                    mask = _safe_str_series(current_filtered[col_name]).isin([str(v) for v in result])
+                    mask = _isin_case_insensitive(current_filtered[col_name], result)
                     current_filtered = current_filtered[mask].copy()
 
             # ── Кодировочные фильтры ──
@@ -243,7 +250,7 @@ def render_reestr_visualisation():
                     st.session_state["_rv_cb_region_vals"] = _cb_vals
                     if "Регион" in current_filtered.columns:
                         current_filtered = current_filtered[
-                            _safe_str_series(current_filtered["Регион"]).isin([str(v) for v in _cb_vals])
+                            _isin_case_insensitive(current_filtered["Регион"], _cb_vals)
                         ].copy()
                         selected_filters["Регион"] = _cb_vals
                         processed_cols.add("Регион")
@@ -262,7 +269,7 @@ def render_reestr_visualisation():
                     st.session_state["_rv_cb_farm_vals"] = _cb_vals
                     if "Хозяйство" in current_filtered.columns:
                         current_filtered = current_filtered[
-                            _safe_str_series(current_filtered["Хозяйство"]).isin([str(v) for v in _cb_vals])
+                            _isin_case_insensitive(current_filtered["Хозяйство"], _cb_vals)
                         ].copy()
                         selected_filters["Хозяйство"] = _cb_vals
                         processed_cols.add("Хозяйство")
@@ -282,7 +289,7 @@ def render_reestr_visualisation():
                 if _cb_vals:
                     if "Подразделение" in current_filtered.columns:
                         current_filtered = current_filtered[
-                            _safe_str_series(current_filtered["Подразделение"]).isin([str(v) for v in _cb_vals])
+                            _isin_case_insensitive(current_filtered["Подразделение"], _cb_vals)
                         ].copy()
                         selected_filters["Подразделение"] = _cb_vals
                         processed_cols.add("Подразделение")
@@ -296,7 +303,7 @@ def render_reestr_visualisation():
                     )
                     if culture_col:
                         current_filtered = current_filtered[
-                            _safe_str_series(current_filtered[culture_col]).isin([str(v) for v in _cb_vals])
+                            _isin_case_insensitive(current_filtered[culture_col], _cb_vals)
                         ].copy()
                         selected_filters[culture_col] = _cb_vals
                         processed_cols.add(culture_col)
@@ -308,7 +315,7 @@ def render_reestr_visualisation():
                 if _cb_vals and kod_col and kod_col in current_filtered.columns:
                     matching_codes = {
                         str(code) for code, name in feed_map.items()
-                        if str(name) in [str(v) for v in _cb_vals]
+                        if str(name).lower() in [str(v).lower() for v in _cb_vals]
                     }
                     def _match_feed(code_val, codes=matching_codes):
                         try:
@@ -627,7 +634,7 @@ def _apply_filter_cascading(col, row_cols, i,
         result = create_text_filter(col, row_cols, i, current_filtered)
         if result:
             selected_filters[col] = result
-            mask = _safe_str_series(current_filtered[col]).isin([str(v) for v in result])
+            mask = _isin_case_insensitive(current_filtered[col], result)
             current_filtered = current_filtered[mask].copy()
     elif col in integer_cols:
         result = create_int_filter(col, row_cols, i, current_filtered, full_df)
@@ -672,7 +679,7 @@ def _validate_and_apply(base_df: pd.DataFrame, selected_filters: dict,
     temp = base_df.copy()
     for col, values in selected_filters.items():
         if values and col in temp.columns:
-            temp = temp[_safe_str_series(temp[col]).isin([str(v) for v in values])]
+            temp = temp[_isin_case_insensitive(temp[col], values)]
     for col, (mn, mx) in numeric_filters.items():
         if mn <= mx and col in temp.columns:
             temp = temp[(temp[col] >= mn) & (temp[col] <= mx)]
@@ -685,7 +692,7 @@ def _validate_and_apply(base_df: pd.DataFrame, selected_filters: dict,
         test_df = base_df.copy()
         for col, values in selected_filters.items():
             if values and col in test_df.columns:
-                t = test_df[_safe_str_series(test_df[col]).isin([str(v) for v in values])]
+                t = test_df[_isin_case_insensitive(test_df[col], values)]
                 if len(t) == 0:
                     vals_str = ', '.join(map(str, values[:3]))
                     if len(values) > 3:

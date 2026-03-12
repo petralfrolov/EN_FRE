@@ -140,7 +140,15 @@ def create_text_filter(col: str, cols_container, col_index: int,
             )
             unique_vals = sorted([str(v) for v in unique_vals])
         else:
-            unique_vals = sorted([str(v) for v in filtered_data[col].dropna().unique().tolist()])
+            unique_vals_raw = filtered_data[col].dropna().unique().tolist()
+            # Дедупликация без учета регистра: приводим к Title Case для красоты или оставляем как есть, но группируем
+            seen = {}
+            for v in unique_vals_raw:
+                v_str = str(v).strip()
+                v_lower = v_str.lower()
+                if v_lower not in seen:
+                    seen[v_lower] = v_str
+            unique_vals = sorted(seen.values())
 
         if not unique_vals:
             return None
